@@ -183,6 +183,7 @@ TEST(SpinLockTest, MultipleThreads)
     };
 
     std::vector<std::thread> threads;
+    threads.reserve(static_cast<std::size_t>(num_threads));
     for (int i = 0; i < num_threads; ++i)
     {
         threads.emplace_back(worker);
@@ -319,6 +320,7 @@ TEST(SpinLockTest, ManyThreads)
     };
 
     std::vector<std::thread> threads;
+    threads.reserve(num_threads);
     for (size_t i = 0; i < num_threads; ++i)
     {
         threads.emplace_back(worker);
@@ -688,8 +690,10 @@ TEST(LifetimeObserverTest, TestSimpleCallbackThreaded)
     TestObjHolder holder(obj, access_mu);
 
     std::atomic<bool> start{false};
+    constexpr int kReaders = 4;
     std::vector<std::thread> readers;
-    for (int i = 0; i < 4; ++i)
+    readers.reserve(static_cast<std::size_t>(kReaders));
+    for (int i = 0; i < kReaders; ++i)
     {
         readers.emplace_back([&]() {
             while (!start.load(std::memory_order_acquire))
@@ -885,8 +889,10 @@ TEST(LifetimeObserverTest, TestDeferredCallbackThreaded)
         return true;
     };
 
+    constexpr int kWorkers = 4;
     std::vector<std::thread> workers;
-    for (int i = 0; i < 4; ++i)
+    workers.reserve(static_cast<std::size_t>(kWorkers));
+    for (int i = 0; i < kWorkers; ++i)
     {
         auto cb = make_callback();
         workers.emplace_back(
