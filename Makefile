@@ -170,9 +170,13 @@ TESTER_SRC := $(TESTDIR)/tester.cpp
 TESTER_TARGET := tester
 TESTER_DEPFILE := $(OBJDIR)/$(TESTER_TARGET).d
 
-DEMO_SRC := $(DEMODIR)/demo_skeleton.cpp
-DEMO_TARGET := demo_skeleton
-DEMO_DEPFILE := $(OBJDIR)/$(DEMO_TARGET).d
+DEMO_SKELETON_SRC := $(DEMODIR)/demo_skeleton.cpp
+DEMO_SKELETON_TARGET := demo_skeleton
+DEMO_SKELETON_DEPFILE := $(OBJDIR)/$(DEMO_SKELETON_TARGET).d
+
+DEMO_LIFETIME_SRC := $(DEMODIR)/demo_lifetime_observer.cpp
+DEMO_LIFETIME_TARGET := demo_lifetime_observer
+DEMO_LIFETIME_DEPFILE := $(OBJDIR)/$(DEMO_LIFETIME_TARGET).d
 
 # Header dependencies
 HEADERS := $(wildcard $(INCLUDEDIR)/*.hpp)
@@ -183,7 +187,8 @@ ifeq ($(ENABLE_TESTS),yes)
     TARGETS += $(OBJDIR)/$(TESTER_TARGET)
 endif
 ifeq ($(ENABLE_DEMO),yes)
-    TARGETS += $(OBJDIR)/$(DEMO_TARGET)
+    TARGETS += $(OBJDIR)/$(DEMO_SKELETON_TARGET)
+    TARGETS += $(OBJDIR)/$(DEMO_LIFETIME_TARGET)
 endif
 
 # Default target
@@ -224,12 +229,18 @@ ifeq ($(ENABLE_COVERAGE),yes)
 	$(Q)rm -f $(OBJDIR)/*.gcda $(OBJDIR)/*.gcov
 endif
 
-# Build demo
-$(OBJDIR)/$(DEMO_TARGET): $(DEMO_SRC) $(HEADERS) | $(OBJDIR)
+# Build demos
+$(OBJDIR)/$(DEMO_SKELETON_TARGET): $(DEMO_SKELETON_SRC) $(HEADERS) | $(OBJDIR)
 	$(ECHO) "  CXX     $@"
 	$(Q)$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
-	$(Q)rm -f $(BASEOBJDIR)/$(DEMO_TARGET)
-	$(Q)ln -s $(OBJDIRNAME)/$(DEMO_TARGET) $(BASEOBJDIR)/$(DEMO_TARGET)
+	$(Q)rm -f $(BASEOBJDIR)/$(DEMO_SKELETON_TARGET)
+	$(Q)ln -s $(OBJDIRNAME)/$(DEMO_SKELETON_TARGET) $(BASEOBJDIR)/$(DEMO_SKELETON_TARGET)
+
+$(OBJDIR)/$(DEMO_LIFETIME_TARGET): $(DEMO_LIFETIME_SRC) $(HEADERS) | $(OBJDIR)
+	$(ECHO) "  CXX     $@"
+	$(Q)$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
+	$(Q)rm -f $(BASEOBJDIR)/$(DEMO_LIFETIME_TARGET)
+	$(Q)ln -s $(OBJDIRNAME)/$(DEMO_LIFETIME_TARGET) $(BASEOBJDIR)/$(DEMO_LIFETIME_TARGET)
 
 # Run tests
 test: $(OBJDIR)/$(TESTER_TARGET)
@@ -268,10 +279,10 @@ else
 	@echo "Coverage disabled (ENABLE_COVERAGE=$(ENABLE_COVERAGE); use --enable-coverage or BUILD_TYPE=release)"
 endif
 
-# Run demo
-demo: $(OBJDIR)/$(DEMO_TARGET)
-	$(ECHO) "  RUN     $(DEMO_TARGET)"
-	$(Q)$(OBJDIR)/$(DEMO_TARGET)
+# Run demo (LifetimeObserver is the primary example)
+demo: $(OBJDIR)/$(DEMO_LIFETIME_TARGET)
+	$(ECHO) "  RUN     $(DEMO_LIFETIME_TARGET)"
+	$(Q)$(OBJDIR)/$(DEMO_LIFETIME_TARGET)
 
 # Install (header-only library)
 install:
@@ -304,9 +315,9 @@ uninstall:
 # Clean build artifacts
 clean:
 	$(ECHO) "  CLEAN   $(OBJDIR)"
-	$(Q)rm -f $(OBJDIR)/$(TESTER_TARGET) $(OBJDIR)/$(DEMO_TARGET)
+	$(Q)rm -f $(OBJDIR)/$(TESTER_TARGET) $(OBJDIR)/$(DEMO_SKELETON_TARGET) $(OBJDIR)/$(DEMO_LIFETIME_TARGET)
 	$(Q)rm -f $(OBJDIR)/*.o $(OBJDIR)/*.d $(OBJDIR)/*.gcda $(OBJDIR)/*.gcno $(OBJDIR)/*.gcov
-	$(Q)rm -f $(BASEOBJDIR)/$(TESTER_TARGET) $(BASEOBJDIR)/$(DEMO_TARGET)
+	$(Q)rm -f $(BASEOBJDIR)/$(TESTER_TARGET) $(BASEOBJDIR)/$(DEMO_SKELETON_TARGET) $(BASEOBJDIR)/$(DEMO_LIFETIME_TARGET)
 	$(Q)rm -f *.gcov *.gcda *.gcno
 	$(ECHO) "Clean complete!"
 
@@ -354,4 +365,5 @@ help:
 
 # Include generated dependency files
 -include $(TESTER_DEPFILE)
--include $(DEMO_DEPFILE)
+-include $(DEMO_SKELETON_DEPFILE)
+-include $(DEMO_LIFETIME_DEPFILE)
