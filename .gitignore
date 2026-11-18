@@ -1,0 +1,5 @@
+obj/
+*.o
+tester
+tmp/
+config.mk
