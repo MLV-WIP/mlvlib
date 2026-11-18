@@ -864,19 +864,38 @@ TEST(LifetimeObserverTest, TestDeferredCallbackThreaded)
 
     auto probe = make_callback();
 
+    // Handshake instead of a fixed sleep: wait for live hits, destroy, wait for
+    // dead hits, then stop. A 1ms sleep raced under release/-O3 on fast CI hosts.
     std::atomic<bool> start{false};
+    std::atomic<bool> stop{false};
     std::atomic<int> live_hits{0};
     std::atomic<int> dead_hits{0};
+
+    auto wait_nonzero = [](std::atomic<int>& counter) {
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (counter.load(std::memory_order_acquire) == 0)
+        {
+            if (std::chrono::steady_clock::now() >= deadline)
+            {
+                return false;
+            }
+            std::this_thread::yield();
+        }
+        return true;
+    };
+
     std::vector<std::thread> workers;
     for (int i = 0; i < 4; ++i)
     {
         auto cb = make_callback();
-        workers.emplace_back([cb = std::move(cb), &start, &live_hits, &dead_hits]() {
+        workers.emplace_back(
+            [cb = std::move(cb), &start, &stop, &live_hits, &dead_hits]() {
             while (!start.load(std::memory_order_acquire))
             {
                 std::this_thread::yield();
             }
-            for (int n = 0; n < 10000; ++n)
+            while (!stop.load(std::memory_order_acquire))
             {
                 int result = cb();
                 if (result >= 0)
@@ -888,12 +907,14 @@ TEST(LifetimeObserverTest, TestDeferredCallbackThreaded)
     }
 
     start.store(true, std::memory_order_release);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    ASSERT_TRUE(wait_nonzero(live_hits)) << "timed out waiting for live hits";
     {
         std::lock_guard lock(access_mu);
         delete obj;
         obj = nullptr;
     }
+    ASSERT_TRUE(wait_nonzero(dead_hits)) << "timed out waiting for dead hits";
+    stop.store(true, std::memory_order_release);
 
     for (auto& t : workers)
     {
@@ -949,8 +970,23 @@ TEST(LifetimeObserverTest, ConcurrentIsAliveDuringDestroy)
     auto* obj = new TestObject();
     LifetimeObserver observer = obj->getObserver();
     std::atomic<bool> start{false};
+    std::atomic<bool> stop{false};
     std::atomic<int> true_hits{0};
     std::atomic<int> false_hits{0};
+
+    auto wait_nonzero = [](std::atomic<int>& counter) {
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (counter.load(std::memory_order_acquire) == 0)
+        {
+            if (std::chrono::steady_clock::now() >= deadline)
+            {
+                return false;
+            }
+            std::this_thread::yield();
+        }
+        return true;
+    };
 
     constexpr int kReaders = 4;
     std::vector<std::thread> readers;
@@ -962,7 +998,7 @@ TEST(LifetimeObserverTest, ConcurrentIsAliveDuringDestroy)
             {
                 std::this_thread::yield();
             }
-            for (int n = 0; n < 100000; ++n)
+            while (!stop.load(std::memory_order_acquire))
             {
                 if (observer.isAlive())
                 {
@@ -977,8 +1013,10 @@ TEST(LifetimeObserverTest, ConcurrentIsAliveDuringDestroy)
     }
 
     start.store(true, std::memory_order_release);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    ASSERT_TRUE(wait_nonzero(true_hits)) << "timed out waiting for true hits";
     delete obj;
+    ASSERT_TRUE(wait_nonzero(false_hits)) << "timed out waiting for false hits";
+    stop.store(true, std::memory_order_release);
 
     for (auto& t : readers)
     {
