@@ -25,7 +25,7 @@ repo root, or install prefix `include/`).
 | `DEBUG_BUILD` / `VERBOSE_DEBUG` | Compile-time flags (`NDEBUG` / `VDEBUG`) |
 | `operator""_KB` / `_MB` / `_GB` | Binary (1024-based) size literals |
 | `print` / `println` | C++23 `std::print` when available; else `std::format` shim |
-| `debug_print` / `debug_println` | No-op unless `VERBOSE_DEBUG` |
+| `debug_print` / `debug_println` | Macros: no-op (args not evaluated) unless `VDEBUG` and not `NDEBUG`; otherwise forward to typed impls. Call unqualified — not `mlvlib::debug_print(...)` |
 | `runtime_assert` | Debug-only abort with `source_location`; no-op in release |
 
 ---
@@ -37,7 +37,8 @@ repo root, or install prefix `include/`).
 Lightweight mutex for **short** critical sections. Models `BasicLockable`
 (`std::scoped_lock` / `std::unique_lock`). Non-copyable, non-movable.
 
-Internally: test-and-test-and-set spin, escalating sleep backoff, then
+Internally: test-and-test-and-set spin, per-thread staggered sleep backoff
+(low bits of hashed `thread::id`, then +7 ns per retry; no RNG), then
 `std::atomic_flag::wait`. Under ThreadSanitizer, acquire/release annotations
 publish happens-before edges.
 
