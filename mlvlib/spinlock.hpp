@@ -89,6 +89,10 @@ private: // methods
     void mark_locked();
     void mark_unlocked();
 
+    // Contended TTAS + backoff + wait. Kept out of lock()'s hot path so the
+    // uncontended acquire stays a thin TAS (no backoff frame setup).
+    void lock_contended();
+
 private: // data members
     std::atomic_flag lock_flag = ATOMIC_FLAG_INIT;
 #ifndef NDEBUG
@@ -98,6 +102,22 @@ private: // data members
 
 
 inline void SpinLock::lock()
+{
+    // Uncontended fast path: one acquire TAS, no locals for backoff/sleep.
+    if (!lock_flag.test_and_set(std::memory_order_acquire))
+    {
+        TSAN_ANNOTATE_HAPPENS_AFTER(this);
+        mark_locked();
+        return;
+    }
+    lock_contended();
+}
+
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
+inline void SpinLock::lock_contended()
 {
     using namespace std::chrono_literals;
 
@@ -128,7 +148,7 @@ inline void SpinLock::lock()
             return; // Lock acquired
         }
 
-        // Contended path only: per-thread staggered base backoff (no RNG).
+        // Per-thread staggered base backoff (no RNG).
         // thread::id is opaque, so hash then take the low 4 bits; +1 → 1..16 ns.
         // Same thread always gets the same base; each backoff loop adds 7 ns.
         if (backoff_count == 0)

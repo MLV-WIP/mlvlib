@@ -37,7 +37,8 @@ repo root, or install prefix `include/`).
 Lightweight mutex for **short** critical sections. Models `BasicLockable`
 (`std::scoped_lock` / `std::unique_lock`). Non-copyable, non-movable.
 
-Internally: test-and-test-and-set spin, per-thread staggered sleep backoff
+Internally: uncontended `lock()` is a single acquire TAS; on failure,
+`lock_contended()` does TTAS spin, per-thread staggered sleep backoff
 (low bits of hashed `thread::id`, then +7 ns per retry; no RNG), then
 `std::atomic_flag::wait`. Under ThreadSanitizer, acquire/release annotations
 publish happens-before edges.
