@@ -104,28 +104,20 @@ namespace mlvlib
 #endif
 
 
-    //
-    // Debug-only print statements (no-op in release builds)
-    // Note: this is a modern C++ paradigm for conditional compilation. Because
-    // the if constexpr is evaluated at compile time, the code inside the if
-    // block is only included in the binary if VERBOSE_DEBUG is true, much like
-    // traditional preprocessor macros, but with the advantage of type safety
-    // and readability, being actual C++ code rather than text substitutions.
-    //
+    // Verbose debug printers (implementation). Prefer the debug_print /
+    // debug_println macros below the namespace — a function-body
+    // `if constexpr (VERBOSE_DEBUG)` still evaluates call-site arguments
+    // (e.g. expensive printHex(...)), which showed up hot in allocator profiles.
     template<typename... Args>
-    inline void debug_print(std::format_string<Args...> fmt, Args&&... args)
+    inline void debug_print_impl(std::format_string<Args...> fmt, Args&&... args)
     {
-        if constexpr (VERBOSE_DEBUG) {
-            print(fmt, std::forward<Args>(args)...);
-        }
+        print(fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
-    inline void debug_println(std::format_string<Args...> fmt, Args&&... args)
+    inline void debug_println_impl(std::format_string<Args...> fmt, Args&&... args)
     {
-        if constexpr (VERBOSE_DEBUG) {
-            println(fmt, std::forward<Args>(args)...);
-        }
+        println(fmt, std::forward<Args>(args)...);
     }
 
 
@@ -176,6 +168,20 @@ namespace mlvlib
     }
 
 } // namespace mlvlib
+
+
+// Argument-eliding wrappers. When VERBOSE_DEBUG is false, these expand to a
+// no-op and do not evaluate __VA_ARGS__. When true, they forward to the
+// typed impls above. Call as debug_print(...) / debug_println(...) (not
+// mlvlib::debug_print — a qualified name would leave a stray `mlvlib::`
+// before a no-op expansion).
+#if defined(VDEBUG) && !defined(NDEBUG)
+#  define debug_print(...) ::mlvlib::debug_print_impl(__VA_ARGS__)
+#  define debug_println(...) ::mlvlib::debug_println_impl(__VA_ARGS__)
+#else
+#  define debug_print(...) static_cast<void>(0)
+#  define debug_println(...) static_cast<void>(0)
+#endif
 
 
 #endif // MLVLIB_HELPER_HPP_
