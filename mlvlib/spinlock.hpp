@@ -36,7 +36,8 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
-#include <random>
+#include <cstddef>
+#include <functional>
 #include <thread>
 
 
@@ -88,6 +89,10 @@ private: // methods
     void mark_locked();
     void mark_unlocked();
 
+    // Contended TTAS + backoff + wait. Kept out of lock()'s hot path so the
+    // uncontended acquire stays a thin TAS (no backoff frame setup).
+    void lock_contended();
+
 private: // data members
     std::atomic_flag lock_flag = ATOMIC_FLAG_INIT;
 #ifndef NDEBUG
@@ -98,23 +103,28 @@ private: // data members
 
 inline void SpinLock::lock()
 {
-    // Single static instance per thread; efficient and thread safe
-    // without requiring additional costly synchronization
-    thread_local static std::minstd_rand gen{std::random_device{}()};
-    thread_local static std::uniform_int_distribution<int> dist{1, 100};
+    // Uncontended fast path: one acquire TAS, no locals for backoff/sleep.
+    if (!lock_flag.test_and_set(std::memory_order_acquire))
+    {
+        TSAN_ANNOTATE_HAPPENS_AFTER(this);
+        mark_locked();
+        return;
+    }
+    lock_contended();
+}
 
-    // Incrementing time to wait if we get contention. This is an
-    // escalating backoff strategy to avoid the thundering herd problem
-    // when the resource becomes available. This doesn't have to be highly
-    // random, and it doesn't even have to be highly accurate on the wait;
-    // the more important attribute is that it differentiates the wait
-    // times between different threads to encourage ordered acquisition
-    // attempts.
-    std::chrono::nanoseconds wait_time{dist(gen)};
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
+inline void SpinLock::lock_contended()
+{
+    using namespace std::chrono_literals;
 
     // Must live across loop iterations; resetting inside the loop
     // would make the wait() fallback unreachable.
     int backoff_count = 0;
+    auto wait_time = 0ns;
 
     // Test-and-Test-and-set (TTAS) spin lock with escalating backoff
     while (true)
@@ -138,11 +148,25 @@ inline void SpinLock::lock()
             return; // Lock acquired
         }
 
-        // Failed to acquire - use escalating backoff
+        // Per-thread staggered base backoff (no RNG).
+        // thread::id is opaque, so hash then take the low 4 bits; +1 → 1..16 ns.
+        // Same thread always gets the same base; each backoff loop adds 7 ns.
+        if (backoff_count == 0)
+        {
+            thread_local static const auto kBaseBackoff = [] {
+                using namespace std::chrono_literals;
+                const std::size_t h =
+                    std::hash<std::thread::id>{}(std::this_thread::get_id());
+                return (1 + (h & 0xfu)) * 1ns;
+            }();
+            wait_time = kBaseBackoff;
+        }
+
+        // Failed to acquire - linear escalate then block
         if (backoff_count < 10)
         {
             std::this_thread::sleep_for(wait_time);
-            wait_time += wait_time;
+            wait_time += 7ns;
             ++backoff_count;
         }
         else
