@@ -7,7 +7,9 @@ Unless noted, types and helpers live in namespace `mlvlib`.
 | Header | Contents |
 |--------|----------|
 | `mlvlib/helper.hpp` | Debug flags, print shims, `runtime_assert`, size literals |
-| `mlvlib/spinlock.hpp` | `SpinLock` |
+| `mlvlib/lock_traits.hpp` | Lock concepts (`BasicLockable`, `Lockable`, `DebugIntrospectableLock`), `lock_traits<Lock>`, `assert_lock_held()`, `MLVLIB_NO_UNIQUE_ADDRESS` |
+| `mlvlib/spinlock.hpp` | `SpinLock` + `lock_traits<SpinLock>` |
+| `mlvlib/null_lock.hpp` | `NullLock` (no-op lock for single-threaded builds) + `lock_traits<NullLock>` |
 | `mlvlib/lifetimeobserver.hpp` | `LifetimeObserver` |
 | `mlvlib/mlvlib.hpp` | Umbrella include |
 
@@ -60,10 +62,76 @@ public:
 | `try_lock()` | Non-blocking; `true` if acquired |
 | `unlock()` | Release and wake one waiter; must be held by caller |
 
-Debug builds record the owner thread id and abort on unlock-by-non-owner or
-unlock-without-hold. Release builds are flag-only.
+Debug builds record the owner thread id (using a relaxed `std::atomic<std::thread::id>`)
+and abort on unlock-by-non-owner or unlock-without-hold. Debug builds also expose
+TSan-clean introspection methods:
+
+| Method (`!NDEBUG` only) | Description |
+|-------------------------|-------------|
+| `debug_is_locked()` | `true` if the lock flag is currently set |
+| `debug_is_owned_by_current_thread()` | `true` if `owner_` matches `std::this_thread::get_id()` |
+
+Release builds omit `owner_` and these methods (flag-only `SpinLock`).
 
 Deep dive: [SpinLock Analysis](deepdive/SpinLock_Analysis.md).
+
+---
+
+## NullLock
+
+**Header:** `mlvlib/null_lock.hpp`
+
+No-op `Lockable` primitive for single-threaded or externally serialized builds.
+Non-copyable, non-movable. Provides **no** mutual exclusion and intentionally
+emits no ThreadSanitizer happens-before annotations.
+
+```cpp
+namespace mlvlib {
+class NullLock {
+public:
+    void lock() noexcept;
+    bool try_lock() noexcept;
+    void unlock() noexcept;
+#ifndef NDEBUG
+    bool debug_is_locked() const noexcept;
+    bool debug_is_owned_by_current_thread() const noexcept;
+#endif
+};
+}
+```
+
+- **Release (`NDEBUG`):** empty class (`std::is_empty_v<NullLock> == true`, 0 bytes
+  with `MLVLIB_NO_UNIQUE_ADDRESS`). `lock()` / `unlock()` are empty; `try_lock()`
+  returns `true`.
+- **Debug (`!NDEBUG`):** records the owning `std::thread::id` to abort on
+  re-entrant `lock()`, unlock-without-hold, or unlock-by-non-owner; `try_lock()`
+  returns `false` if already held; exposes `debug_is_locked()` and
+  `debug_is_owned_by_current_thread()`.
+
+---
+
+## lock_traits
+
+**Header:** `mlvlib/lock_traits.hpp`
+
+Compile-time concepts and traits decoupling generic consumers from concrete lock
+types (`SpinLock`, `NullLock`, `std::mutex`, or any third-party `BasicLockable`).
+
+| Symbol | Description |
+|--------|-------------|
+| `BasicLockable<L>` | Concept requiring `lock()` and `unlock()` |
+| `Lockable<L>` | `BasicLockable<L>` + `try_lock()` convertible to `bool` |
+| `DebugIntrospectableLock<L>` | Concept detecting `!NDEBUG` `debug_is_locked()` / `debug_is_owned_by_current_thread()` |
+| `lock_traits<Lock>` | Exposes `lock_type`, `guard_type` (`std::scoped_lock<Lock>`), `is_thread_safe`, `is_noop`, `supports_try_lock`, `has_debug_introspection`, `name`, and `std::optional<bool>` debug query forwarders (`std::nullopt` when unsupported) |
+| `assert_lock_held(lock)` | Debug-only precondition assert when `has_debug_introspection` is `true`; no-op for `std::mutex` and in `NDEBUG` |
+| `MLVLIB_NO_UNIQUE_ADDRESS` | Portable `[[no_unique_address]]` / `[[msvc::no_unique_address]]` macro |
+
+| Type | `is_thread_safe` | `is_noop` | `supports_try_lock` | `name` |
+|------|------------------|-----------|---------------------|--------|
+| `mlvlib::SpinLock` | `true` | `false` | `true` | `"spinlock"` |
+| `std::mutex` | `true` | `false` | `true` | `"std::mutex"` |
+| `mlvlib::NullLock` | `false` | `true` | `true` | `"null"` |
+| custom `BasicLockable` | `true` | `false` | `Lockable<L>` | `"custom"` |
 
 ---
 

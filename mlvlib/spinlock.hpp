@@ -40,6 +40,8 @@
 #include <functional>
 #include <thread>
 
+#include "lock_traits.hpp"
+
 
 // ThreadSanitizer annotations for custom synchronization primitives
 // These tell TSan about happens-before relationships in our SpinLock.
@@ -78,6 +80,12 @@ public:
     bool try_lock();
     void unlock();
 
+#ifndef NDEBUG
+    // Debug-only introspection (TSan-clean via relaxed atomics).
+    bool debug_is_locked() const noexcept;
+    bool debug_is_owned_by_current_thread() const noexcept;
+#endif
+
 private: // methods
     SpinLock(const SpinLock&) = delete;
     SpinLock& operator=(const SpinLock&) = delete;
@@ -96,7 +104,7 @@ private: // methods
 private: // data members
     std::atomic_flag lock_flag = ATOMIC_FLAG_INIT;
 #ifndef NDEBUG
-    std::thread::id owner_{};
+    std::atomic<std::thread::id> owner_{};
 #endif
 };
 
@@ -210,9 +218,9 @@ inline void SpinLock::unlock()
 inline void SpinLock::mark_locked()
 {
 #ifndef NDEBUG
-    assert(owner_ == std::thread::id{} &&
+    assert(owner_.load(std::memory_order_relaxed) == std::thread::id{} &&
            "SpinLock acquired while owner id still set");
-    owner_ = std::this_thread::get_id();
+    owner_.store(std::this_thread::get_id(), std::memory_order_relaxed);
 #endif
 }
 
@@ -220,11 +228,32 @@ inline void SpinLock::mark_locked()
 inline void SpinLock::mark_unlocked()
 {
 #ifndef NDEBUG
-    assert(owner_ == std::this_thread::get_id() &&
+    assert(owner_.load(std::memory_order_relaxed) == std::this_thread::get_id() &&
            "SpinLock::unlock by non-owner or while not held");
-    owner_ = std::thread::id{};
+    owner_.store(std::thread::id{}, std::memory_order_relaxed);
 #endif
 }
+
+
+#ifndef NDEBUG
+inline bool SpinLock::debug_is_locked() const noexcept
+{
+    return lock_flag.test(std::memory_order_relaxed);
+}
+
+
+inline bool SpinLock::debug_is_owned_by_current_thread() const noexcept
+{
+    return owner_.load(std::memory_order_relaxed) == std::this_thread::get_id();
+}
+#endif
+
+
+template<>
+struct lock_traits<SpinLock> : detail::lock_traits_base<SpinLock>
+{
+    static constexpr std::string_view name = "spinlock";
+};
 
 
 } // namespace mlvlib

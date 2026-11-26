@@ -10,12 +10,16 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <thread>
+#include <type_traits>
 #include <vector>
 #include <gtest/gtest.h>
 
 #include "mlvlib/helper.hpp"
+#include "mlvlib/lock_traits.hpp"
 #include "mlvlib/spinlock.hpp"
+#include "mlvlib/null_lock.hpp"
 #include "mlvlib/lifetimeobserver.hpp"
 
 using namespace std::literals;
@@ -292,6 +296,259 @@ TEST(SpinLockTest, UnlockByNonOwnerAborts)
             thief.join();
         },
         "SpinLock");
+}
+
+
+TEST(SpinLockTest, DebugIntrospection)
+{
+    SpinLock lock;
+    EXPECT_FALSE(lock.debug_is_locked());
+    EXPECT_FALSE(lock.debug_is_owned_by_current_thread());
+    EXPECT_EQ(lock_traits<SpinLock>::debug_is_locked(lock), std::optional<bool>(false));
+    EXPECT_EQ(lock_traits<SpinLock>::debug_is_owned_by_current_thread(lock),
+              std::optional<bool>(false));
+
+    lock.lock();
+    EXPECT_TRUE(lock.debug_is_locked());
+    EXPECT_TRUE(lock.debug_is_owned_by_current_thread());
+    EXPECT_EQ(lock_traits<SpinLock>::debug_is_locked(lock), std::optional<bool>(true));
+    EXPECT_EQ(lock_traits<SpinLock>::debug_is_owned_by_current_thread(lock),
+              std::optional<bool>(true));
+    assert_lock_held(lock);
+
+    // Concurrent read from a non-owner thread must observe locked=true, owned=false,
+    // and remain race-free under ThreadSanitizer.
+    std::atomic<bool> observer_saw_locked{false};
+    std::atomic<bool> observer_saw_owned{true};
+    std::thread observer([&]() {
+        observer_saw_locked.store(lock.debug_is_locked(), std::memory_order_relaxed);
+        observer_saw_owned.store(lock.debug_is_owned_by_current_thread(),
+                                 std::memory_order_relaxed);
+    });
+    observer.join();
+    EXPECT_TRUE(observer_saw_locked.load());
+    EXPECT_FALSE(observer_saw_owned.load());
+
+    lock.unlock();
+    EXPECT_FALSE(lock.debug_is_locked());
+    EXPECT_FALSE(lock.debug_is_owned_by_current_thread());
+}
+
+
+TEST(SpinLockTest, AssertLockHeldAbortsWhenUnlocked)
+{
+    SpinLock lock;
+    EXPECT_DEATH(assert_lock_held(lock), "lock must be held");
+}
+#endif // NDEBUG
+
+
+// ---------------------------------------------------------------------------
+// NullLock & lock_traits tests
+// ---------------------------------------------------------------------------
+
+namespace
+{
+struct CustomBasicLock
+{
+    void lock() {}
+    void unlock() {}
+};
+
+struct NonLock
+{
+    void lock() {}
+};
+} // namespace
+
+TEST(LockTraitsTest, ConceptsAndProperties)
+{
+    static_assert(BasicLockable<SpinLock>);
+    static_assert(Lockable<SpinLock>);
+    static_assert(BasicLockable<NullLock>);
+    static_assert(Lockable<NullLock>);
+    static_assert(BasicLockable<std::mutex>);
+    static_assert(Lockable<std::mutex>);
+    static_assert(BasicLockable<CustomBasicLock>);
+    static_assert(!Lockable<CustomBasicLock>);
+    static_assert(!BasicLockable<NonLock>);
+
+    // SpinLock traits
+    static_assert(std::is_same_v<lock_traits<SpinLock>::lock_type, SpinLock>);
+    static_assert(std::is_same_v<lock_traits<SpinLock>::guard_type, std::scoped_lock<SpinLock>>);
+    static_assert(lock_traits<SpinLock>::is_thread_safe);
+    static_assert(!lock_traits<SpinLock>::is_noop);
+    static_assert(lock_traits<SpinLock>::supports_try_lock);
+    static_assert(lock_traits<SpinLock>::name == "spinlock");
+
+    // std::mutex traits
+    static_assert(std::is_same_v<lock_traits<std::mutex>::lock_type, std::mutex>);
+    static_assert(
+        std::is_same_v<lock_traits<std::mutex>::guard_type, std::scoped_lock<std::mutex>>);
+    static_assert(lock_traits<std::mutex>::is_thread_safe);
+    static_assert(!lock_traits<std::mutex>::is_noop);
+    static_assert(lock_traits<std::mutex>::supports_try_lock);
+    static_assert(!lock_traits<std::mutex>::has_debug_introspection);
+    static_assert(lock_traits<std::mutex>::name == "std::mutex");
+
+    // NullLock traits
+    static_assert(std::is_same_v<lock_traits<NullLock>::lock_type, NullLock>);
+    static_assert(std::is_same_v<lock_traits<NullLock>::guard_type, std::scoped_lock<NullLock>>);
+    static_assert(!lock_traits<NullLock>::is_thread_safe);
+    static_assert(lock_traits<NullLock>::is_noop);
+    static_assert(lock_traits<NullLock>::supports_try_lock);
+    static_assert(lock_traits<NullLock>::name == "null");
+
+    // Third-party BasicLockable primary template fallback
+    static_assert(lock_traits<CustomBasicLock>::is_thread_safe);
+    static_assert(!lock_traits<CustomBasicLock>::is_noop);
+    static_assert(!lock_traits<CustomBasicLock>::supports_try_lock);
+    static_assert(!lock_traits<CustomBasicLock>::has_debug_introspection);
+    static_assert(lock_traits<CustomBasicLock>::name == "custom");
+
+#ifndef NDEBUG
+    static_assert(DebugIntrospectableLock<SpinLock>);
+    static_assert(DebugIntrospectableLock<NullLock>);
+    static_assert(lock_traits<SpinLock>::has_debug_introspection);
+    static_assert(lock_traits<NullLock>::has_debug_introspection);
+#else
+    static_assert(!DebugIntrospectableLock<SpinLock>);
+    static_assert(!DebugIntrospectableLock<NullLock>);
+    static_assert(!lock_traits<SpinLock>::has_debug_introspection);
+    static_assert(!lock_traits<NullLock>::has_debug_introspection);
+#endif
+
+    std::mutex mtx;
+    EXPECT_EQ(lock_traits<std::mutex>::debug_is_locked(mtx), std::nullopt);
+    EXPECT_EQ(lock_traits<std::mutex>::debug_is_owned_by_current_thread(mtx), std::nullopt);
+    // assert_lock_held is a no-op for std::mutex even when unlocked
+    assert_lock_held(mtx);
+    {
+        lock_traits<std::mutex>::guard_type guard(mtx);
+        assert_lock_held(mtx);
+    }
+
+    CustomBasicLock custom;
+    EXPECT_EQ(lock_traits<CustomBasicLock>::debug_is_locked(custom), std::nullopt);
+    EXPECT_EQ(lock_traits<CustomBasicLock>::debug_is_owned_by_current_thread(custom),
+              std::nullopt);
+    assert_lock_held(custom);
+}
+
+
+TEST(NullLockTest, BasicLockingAndRAII)
+{
+    NullLock lock;
+    int counter = 0;
+
+    lock.lock();
+    ++counter;
+    assert_lock_held(lock);
+    lock.unlock();
+    EXPECT_EQ(counter, 1);
+
+    EXPECT_TRUE(lock.try_lock());
+    ++counter;
+    assert_lock_held(lock);
+    lock.unlock();
+    EXPECT_EQ(counter, 2);
+
+    {
+        std::scoped_lock<NullLock> guard(lock);
+        ++counter;
+        assert_lock_held(lock);
+    }
+    EXPECT_EQ(counter, 3);
+
+    {
+        std::unique_lock<NullLock> ulock(lock);
+        EXPECT_TRUE(ulock.owns_lock());
+        ++counter;
+        ulock.unlock();
+        EXPECT_FALSE(ulock.owns_lock());
+    }
+    EXPECT_EQ(counter, 4);
+}
+
+
+TEST(NullLockTest, EmptyObjectOptimizationInRelease)
+{
+    struct HolderWithLock
+    {
+        std::size_t value{0};
+        MLVLIB_NO_UNIQUE_ADDRESS NullLock lock{};
+    };
+
+#ifdef NDEBUG
+    static_assert(std::is_empty_v<NullLock>,
+                  "NullLock must be an empty class in NDEBUG builds");
+    EXPECT_EQ(sizeof(HolderWithLock), sizeof(std::size_t));
+#else
+    EXPECT_GE(sizeof(HolderWithLock), sizeof(std::size_t));
+#endif
+}
+
+
+#ifndef NDEBUG
+TEST(NullLockTest, DebugIntrospectionAndReentrancy)
+{
+    NullLock lock;
+    EXPECT_FALSE(lock.debug_is_locked());
+    EXPECT_FALSE(lock.debug_is_owned_by_current_thread());
+    EXPECT_EQ(lock_traits<NullLock>::debug_is_locked(lock), std::optional<bool>(false));
+    EXPECT_EQ(lock_traits<NullLock>::debug_is_owned_by_current_thread(lock),
+              std::optional<bool>(false));
+
+    lock.lock();
+    EXPECT_TRUE(lock.debug_is_locked());
+    EXPECT_TRUE(lock.debug_is_owned_by_current_thread());
+    EXPECT_EQ(lock_traits<NullLock>::debug_is_locked(lock), std::optional<bool>(true));
+    EXPECT_EQ(lock_traits<NullLock>::debug_is_owned_by_current_thread(lock),
+              std::optional<bool>(true));
+
+    // Re-entrant try_lock fails in debug builds
+    EXPECT_FALSE(lock.try_lock());
+    EXPECT_TRUE(lock.debug_is_owned_by_current_thread());
+
+    lock.unlock();
+    EXPECT_FALSE(lock.debug_is_locked());
+    EXPECT_FALSE(lock.debug_is_owned_by_current_thread());
+}
+
+
+TEST(NullLockTest, DoubleLockAborts)
+{
+    NullLock lock;
+    lock.lock();
+    EXPECT_DEATH(lock.lock(), "NullLock");
+    lock.unlock();
+}
+
+
+TEST(NullLockTest, UnlockWithoutHoldAborts)
+{
+    NullLock lock;
+    EXPECT_DEATH(lock.unlock(), "NullLock");
+}
+
+
+TEST(NullLockTest, UnlockByNonOwnerAborts)
+{
+    EXPECT_DEATH(
+        {
+            NullLock lock;
+            lock.lock();
+            std::thread thief([&lock]() { lock.unlock(); });
+            thief.join();
+        },
+        "NullLock");
+}
+
+
+TEST(NullLockTest, AssertLockHeldAbortsWhenUnlocked)
+{
+    NullLock lock;
+    EXPECT_DEATH(assert_lock_held(lock), "lock must be held");
 }
 #endif // NDEBUG
 
