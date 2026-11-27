@@ -8,7 +8,9 @@ across MLV projects (starting with [slab-pool-allocator](https://github.com/MLV-
 | Header | Namespace | Description |
 |--------|-----------|-------------|
 | `mlvlib/helper.hpp` | `mlvlib` | Debug flags, `print`/`println` shims, `runtime_assert`, KiB/MiB/GiB literals |
-| `mlvlib/spinlock.hpp` | `mlvlib` | Hybrid TTAS → backoff → `atomic_flag::wait` lock (`BasicLockable`) |
+| `mlvlib/lock_traits.hpp` | `mlvlib` | Lock concepts (`BasicLockable`, `Lockable`), `lock_traits<Lock>`, `assert_lock_held()` |
+| `mlvlib/spinlock.hpp` | `mlvlib` | Hybrid TTAS → backoff → `atomic_flag::wait` lock (`Lockable`) |
+| `mlvlib/null_lock.hpp` | `mlvlib` | No-op lock for single-threaded builds (empty in release, debug owner checks) |
 | `mlvlib/lifetimeobserver.hpp` | `mlvlib` | Intrusive weak liveness tracking for async callbacks |
 | `mlvlib/mlvlib.hpp` | — | Umbrella include |
 

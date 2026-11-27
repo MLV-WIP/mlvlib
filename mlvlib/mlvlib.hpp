@@ -36,7 +36,9 @@
 // Umbrella header for the mlvlib utilities package.
 
 #include "helper.hpp"
+#include "lock_traits.hpp"
 #include "spinlock.hpp"
+#include "null_lock.hpp"
 #include "lifetimeobserver.hpp"
 
 #endif // MLVLIB_MLVLIB_HPP_
